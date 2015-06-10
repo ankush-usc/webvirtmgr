@@ -11,6 +11,11 @@ from vrtManager.storage import wvmStorage, wvmStorages
 
 from libvirt import libvirtError
 
+#added by Ankush on 04/06
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 def storages(request, host_id):
     """

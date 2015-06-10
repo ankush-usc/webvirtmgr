@@ -9,21 +9,36 @@ from servers.forms import ComputeAddTcpForm, ComputeAddSshForm, ComputeEditHostF
 from vrtManager.hostdetails import wvmHostDetails
 from vrtManager.connection import CONN_SSH, CONN_TCP, CONN_TLS, CONN_SOCKET, connection_manager
 from libvirt import libvirtError
+#added by Ankush on 03/06
+from django.contrib.sessions.models import Session
+from django.contrib.auth.models import User
+from django.conf import settings
 
+import logging
+logger = logging.getLogger(__name__)
+
+def getuser(request):
+    session_key = request.COOKIES[settings.SESSION_COOKIE_NAME]
+    session = Session.objects.get(session_key=session_key)
+    uid = session.get_decoded().get('_auth_user_id')
+    user = User.objects.get(pk=uid)
+    return user
 
 def index(request):
     """
-
     Index page.
-
     """
     if not request.user.is_authenticated():
+        logger.info("User:"+request.user.username+" has tried logging in and failed.");
         return HttpResponseRedirect(reverse('login'))
     else:
+	logger.info("User:"+request.user.username+" successfully logged in. ");
         return HttpResponseRedirect(reverse('servers_list'))
 
 
 def servers_list(request):
+    user = getuser(request)
+    logger.info("Server list is being retrieved for User:"+user.username);
     """
     Servers page.
     """
@@ -121,6 +136,8 @@ def servers_list(request):
 
 
 def infrastructure(request):
+    user = getuser(request)
+    logger.info("Connection view(Infrastructure view request) by User: "+user.username);
     """
     Infrastructure page.
     """

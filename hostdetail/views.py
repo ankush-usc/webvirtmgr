@@ -6,11 +6,17 @@ from django.template import RequestContext
 from django.core.urlresolvers import reverse
 import json
 import time
-
+import logging
 from servers.models import Compute
 from vrtManager.hostdetails import wvmHostDetails
 from webvirtmgr.settings import TIME_JS_REFRESH
 
+# added by Ankush on 03/06
+from django.contrib.sessions.models import Session
+from django.contrib.auth.models import User
+from servers.views import getuser
+
+logger = logging.getLogger(__name__)
 
 def hostusage(request, host_id):
     """
@@ -18,10 +24,10 @@ def hostusage(request, host_id):
     """
     if not request.user.is_authenticated():
         return HttpResponseRedirect(reverse('login'))
-
     points = 5
     datasets = {}
     cookies = {}
+    logger.info("User:"+request.user.username+" is retrieving details of host:"+host_id);
     compute = Compute.objects.get(id=host_id)
     curent_time = time.strftime("%H:%M:%S")
 
@@ -32,6 +38,7 @@ def hostusage(request, host_id):
                               compute.type)
         cpu_usage = conn.get_cpu_usage()
         mem_usage = conn.get_memory_usage()
+        logger.info("User:"+request.user.username+" is seeing host:" + compute.hostname);
         conn.close()
     except libvirtError:
         cpu_usage = 0
@@ -107,7 +114,6 @@ def overview(request, host_id):
     """
     if not request.user.is_authenticated():
         return HttpResponseRedirect(reverse('login'))
-
     errors = []
     time_refresh = TIME_JS_REFRESH
 
@@ -119,6 +125,7 @@ def overview(request, host_id):
                               compute.password,
                               compute.type)
         hostname, host_arch, host_memory, logical_cpu, model_cpu, uri_conn = conn.get_node_info()
+        logger.info("User:"+request.user.username+" has been presented with information of host: "+compute.hostname);
         hypervisor = conn.hypervisor_type()
         mem_usage = conn.get_memory_usage()
         conn.close()

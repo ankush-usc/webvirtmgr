@@ -25,6 +25,7 @@
                         <th>{% trans "Status" %}</th>
                         <th>{% trans "VCPUs" %}</th>
                         <th>{% trans "Memory" %}</th>
+                        <th>{% trans "Owner" %}</th>
                         <th style="width:252px;">{% trans "Action" %}</th>
                     </tr>
                     </thead>
@@ -49,6 +50,7 @@
                             </td>
                             <td>{{ inst.vcpu }}</td>
                             <td>{{ inst.memory }}{% trans "MB" %}</td>
+                            <td>{{ inst.owner }} </td>
                             <td>
                                 <form action="" method="post" role="form">{% csrf_token %}
                                     <input type="hidden" name="name" value="{{ inst.name }}"/>

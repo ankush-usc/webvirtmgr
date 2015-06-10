@@ -18,6 +18,19 @@ from vrtManager.instance import wvmInstances, wvmInstance
 from libvirt import libvirtError, VIR_DOMAIN_XML_SECURE
 from webvirtmgr.settings import TIME_JS_REFRESH, QEMU_KEYMAPS, QEMU_CONSOLE_TYPES
 
+# added by Ankush 03/06
+import logging
+from ConfigParser import SafeConfigParser
+
+init_parser = SafeConfigParser()
+init_parser.read('configuration_files/init_config.ini')
+
+logger = logging.getLogger(__name__)
+master = init_parser.get('initialize','master')  #initializing the master control for the framework
+logger.info("Master of the framework interface is: "+master)
+
+per_user = init_parser.get('initialize','per_user_view') == '1'
+logger.info("The view is limited to per-user view: "+ str(per_user))
 
 def instusage(request, host_id, vname):
     """
@@ -230,7 +243,7 @@ def insts_status(request, host_id):
         get_instances = conn.get_instances()
     except libvirtError as err:
         errors.append(err)
-
+    logger.info("User: "+request.user.username+", is quering instance info")
     for instance in get_instances:
         instances.append({'name': instance,
                           'status': conn.get_instance_status(instance),
@@ -277,45 +290,81 @@ def instances(request, host_id):
             uuid = inst.uuid
         except Instance.DoesNotExist:
             uuid = conn.get_uuid(instance)
-            inst = Instance(compute_id=host_id, name=instance, uuid=uuid)
+            inst = Instance(compute_id=host_id, name=instance, uuid=uuid,owner=request.user.username)
             inst.save()
-        instances.append({'name': instance,
-                          'status': conn.get_instance_status(instance),
-                          'uuid': uuid,
-                          'memory': conn.get_instance_memory(instance),
-                          'vcpu': conn.get_instance_vcpu(instance),
-                          'has_managed_save_image': conn.get_instance_managed_save_image(instance)})
+        if not per_user or request.user.username == master or (per_user and request.user.username in instance): 
+            inst_own = Instance.objects.get(compute_id=host_id, name=instance)
+            logger.info("Owner of VM: "+instance+" is User: "+inst_own.owner)
+            instances.append({'name': instance,
+                              'status': conn.get_instance_status(instance),
+                              'uuid': uuid,
+                              'memory': conn.get_instance_memory(instance),
+                              'vcpu': conn.get_instance_vcpu(instance),
+                              'has_managed_save_image': conn.get_instance_managed_save_image(instance)})
 
     if conn:
         try:
             if request.method == 'POST':
                 name = request.POST.get('name', '')
                 if 'start' in request.POST:
-                    conn.start(name)
-                    return HttpResponseRedirect(request.get_full_path())
+                    if request.user.username in name or request.user.username == master:
+                         logger.info("User:"+request.user.username+", is starting instance = "+name)
+                         conn.start(name)
+                         return HttpResponseRedirect(request.get_full_path())
+                    else:
+                         msg = _("You don't have the permission to start VM instance = "+name);
+                         errors.append(msg)
                 if 'shutdown' in request.POST:
-                    conn.shutdown(name)
-                    return HttpResponseRedirect(request.get_full_path())
+                    logger.info("User:"+request.user.username+", is shutting down instance = "+name)
+                    if request.user.username in name or request.user.username == master:
+                         conn.shutdown(name)
+                         return HttpResponseRedirect(request.get_full_path())
+                    else:
+                         msg = _("You don't have the permission to shutdown the VM: "+name)
+                         errors.append(msg)
                 if 'destroy' in request.POST:
-                    conn.force_shutdown(name)
-                    return HttpResponseRedirect(request.get_full_path())
+                    logger.info("User:"+request.user.username+", is destroying instance = "+name)
+                    if request.user.username != master or request.user.username in name:
+                         msg = _("You don't have the permission to perform this operation: ")
+                         errors.append(msg)     
+                    else:
+                        conn.force_shutdown(name)
+                        return HttpResponseRedirect(request.get_full_path())
                 if 'managedsave' in request.POST:
-                    conn.managedsave(name)
-                    return HttpResponseRedirect(request.get_full_path())
+                    logger.info("User:"+request.user.username+", is destroying(managed-save) instance = "+name)
+                    if request.user.username in name or request.user.username == master: 
+                        conn.managedsave(name)
+                        return HttpResponseRedirect(request.get_full_path())
+                    else:
+                        msg = _("You don't have the permission to do this operation")
+                        errors.append(msg)
                 if 'deletesaveimage' in request.POST:
-                    conn.managed_save_remove(name)
-                    return HttpResponseRedirect(request.get_full_path())
+                    logger.info("User:"+request.user.username+", is destroying(deleting saved image as well) instance = "+name)
+                    if request.user.username == master:
+                         conn.managed_save_remove(name)
+                         return HttpResponseRedirect(request.get_full_path())
+                    else:
+                         msg = _("You don't have the permission to do this operation")
+                         errors.append(msg)
                 if 'suspend' in request.POST:
-                    conn.suspend(name)
-                    return HttpResponseRedirect(request.get_full_path())
+                    logger.info("User:"+request.user.username+", is suspending instance = "+name)
+                    if request.user.username in name or request.user.username == master:
+                         conn.suspend(name)
+                         return HttpResponseRedirect(request.get_full_path())
+                    else:
+                         msg = _("You don't have the permission to do this operation")
+                         errors.append(msg)
                 if 'resume' in request.POST:
-                    conn.resume(name)
-                    return HttpResponseRedirect(request.get_full_path())
-
+                    logger.info("User:"+request.user.username+", is resuming instance = "+name)
+                    if request.user.username in name or request.user.username == master:
+                         conn.resume(name)
+                         return HttpResponseRedirect(request.get_full_path())
+                    else:
+                         msg = _("You don't have the permission to do this operation")
+                         errors.append(msg)
             conn.close()
         except libvirtError as err:
             errors.append(err)
-
     return render_to_response('instances.html', locals(), context_instance=RequestContext(request))
 
 
@@ -392,148 +441,221 @@ def instance(request, host_id, vname):
                 instance.uuid = uuid
                 instance.save()
         except Instance.DoesNotExist:
-            instance = Instance(compute_id=host_id, name=vname, uuid=uuid)
+            instance = Instance(compute_id=host_id, name=vname, uuid=uuid,owner=request.user.username)
             instance.save()
 
         if request.method == 'POST':
             if 'start' in request.POST:
-                conn.start()
-                return HttpResponseRedirect(request.get_full_path() + '#shutdown')
+                logger.info("User:"+request.user.username+", is starting instance = "+vname)
+                if request.user.username in vname or request.user.username == master:
+                     conn.start()
+                     return HttpResponseRedirect(request.get_full_path() + '#shutdown')
+                else:
+                     msg = _("You don't have the permission to do this operation")
+                     errors.append(msg)
             if 'power' in request.POST:
                 if 'shutdown' == request.POST.get('power', ''):
-                    conn.shutdown()
-                    return HttpResponseRedirect(request.get_full_path() + '#shutdown')
+                    logger.info("User:"+request.user.username+", is shutting-down instance = "+vname)
+                    if request.user.username in vname or request.user.username == master:
+                         conn.shutdown()
+                         return HttpResponseRedirect(request.get_full_path() + '#shutdown')
+                    else:
+                         msg = _("You don't have the permission to shutdown instance = "+vname)
+                         errors.append(msg); 
                 if 'destroy' == request.POST.get('power', ''):
-                    conn.force_shutdown()
-                    return HttpResponseRedirect(request.get_full_path() + '#forceshutdown')
+                    logger.info("User:"+request.user.username+", is issuing a force shutdown to instance = "+vname)
+                    if request.user.username == master or request.user.username in vname:
+                         conn.force_shutdown()
+                         return HttpResponseRedirect(request.get_full_path() + '#forceshutdown')
+                    else:
+                         msg = _("You don't have the permission to do this operation")
+                         errors.append(msg)
                 if 'managedsave' == request.POST.get('power', ''):
-                    conn.managedsave()
-                    return HttpResponseRedirect(request.get_full_path() + '#managedsave')
+                    logger.info("User:"+request.user.username+", is destroying(managed-save) instance = "+vname)
+                    if request.user.username == master:
+                         conn.managedsave()
+                         return HttpResponseRedirect(request.get_full_path() + '#managedsave')
+                    else:
+                         msg = _("You don't have the permission to do this operation")
+                         errors.append(msg)
             if 'deletesaveimage' in request.POST:
-                conn.managed_save_remove()
-                return HttpResponseRedirect(request.get_full_path() + '#managedsave')
+                logger.info("User:"+request.user.username+", is destroying(delete image) instance = "+vname)
+                if request.user.username == master:
+                     conn.managed_save_remove()
+                     return HttpResponseRedirect(request.get_full_path() + '#managedsave')
+                else:
+                     msg = _("You don't have the permission to do this operation")
+                     errors.append(msg)
             if 'suspend' in request.POST:
-                conn.suspend()
-                return HttpResponseRedirect(request.get_full_path() + '#suspend')
+                logger.info("User:"+request.user.username+", is suspending instance = "+vname)
+                if request.user.username in vname or request.user.username == master:
+                     conn.suspend()
+                     return HttpResponseRedirect(request.get_full_path() + '#suspend')
+                else:
+                     msg = _("You cannot suspend other user VM:"+vname)
+                     errors.append(msg)
             if 'resume' in request.POST:
-                conn.resume()
-                return HttpResponseRedirect(request.get_full_path() + '#suspend')
+                logger.info("User:"+request.user.username+", is resuming instance = "+vname)
+                if request.user.username in vname or request.user.username == master:
+                      conn.resume()
+                      return HttpResponseRedirect(request.get_full_path() + '#suspend')
+                else:
+                       msg = _("You cannot resume other user VM:"+vname)
+                       errors.append(msg)
             if 'delete' in request.POST:
-                if conn.get_status() == 1:
-                    conn.force_shutdown()
-                try:
-                    instance = Instance.objects.get(compute_id=host_id, name=vname)
-                    instance.delete()
-                    if request.POST.get('delete_disk', ''):
-                        conn.delete_disk()
-                finally:
-                    conn.delete()
-                return HttpResponseRedirect(reverse('instances', args=[host_id]))
+                if request.user.username == master:
+                    if conn.get_status() == 1:
+                        conn.force_shutdown()
+                    try:
+                        instance = Instance.objects.get(compute_id=host_id, name=vname)
+                        logger.info("User:"+request.user.username+", is deleting VM: " +vname)
+                        instance.delete()
+                        if request.POST.get('delete_disk', ''):
+                            conn.delete_disk()
+                    finally:
+                        conn.delete()
+                    return HttpResponseRedirect(reverse('instances', args=[host_id]))
+                else:
+                     msg = _("You don't have the permission to do this operation")
+                     errors.append(msg)
             if 'snapshot' in request.POST:
                 name = request.POST.get('name', '')
-                conn.create_snapshot(name)
-                return HttpResponseRedirect(request.get_full_path() + '#istaceshapshosts')
+                logger.info("User:"+request.user.username+", is creating snapshot = "+name)
+                if request.user.username in name or request.user.username == master:
+                     conn.create_snapshot(name)
+                     return HttpResponseRedirect(request.get_full_path() + '#istaceshapshosts')
+                else:
+                     msg = _("You cannot perform this operation in other user VM:"+name)
+                     errors.append(msg)
             if 'umount_iso' in request.POST:
-                image = request.POST.get('path', '')
-                dev = request.POST.get('umount_iso', '')
-                conn.umount_iso(dev, image)
-                return HttpResponseRedirect(request.get_full_path() + '#instancemedia')
+                logger.info("User:"+request.user.username+", is unmounting iso image ")
+                if request.user.username == master:
+                     image = request.POST.get('path', '')
+                     dev = request.POST.get('umount_iso', '')
+                     conn.umount_iso(dev, image)
+                     return HttpResponseRedirect(request.get_full_path() + '#instancemedia')
+                else:
+                     msg = _("You don't have the permission to execute this operation");
+                     errors.append(msg)
             if 'mount_iso' in request.POST:
-                image = request.POST.get('media', '')
-                dev = request.POST.get('mount_iso', '')
-                conn.mount_iso(dev, image)
-                return HttpResponseRedirect(request.get_full_path() + '#instancemedia')
-            if 'set_autostart' in request.POST:
-                conn.set_autostart(1)
-                return HttpResponseRedirect(request.get_full_path() + '#instancesettings')
-            if 'unset_autostart' in request.POST:
-                conn.set_autostart(0)
-                return HttpResponseRedirect(request.get_full_path() + '#instancesettings')
-            if 'change_settings' in request.POST:
-                description = request.POST.get('description', '')
-                vcpu = request.POST.get('vcpu', '')
-                cur_vcpu = request.POST.get('cur_vcpu', '')
-                memory = request.POST.get('memory', '')
-                memory_custom = request.POST.get('memory_custom', '')
-                if memory_custom:
-                    memory = memory_custom
-                cur_memory = request.POST.get('cur_memory', '')
-                cur_memory_custom = request.POST.get('cur_memory_custom', '')
-                if cur_memory_custom:
-                    cur_memory = cur_memory_custom
-                conn.change_settings(description, cur_memory, memory, cur_vcpu, vcpu)
-                return HttpResponseRedirect(request.get_full_path() + '#instancesettings')
-            if 'change_xml' in request.POST:
-                xml = request.POST.get('inst_xml', '')
-                if xml:
-                    conn._defineXML(xml)
-                    return HttpResponseRedirect(request.get_full_path() + '#instancexml')
-            if 'set_console_passwd' in request.POST:
-                if request.POST.get('auto_pass', ''):
-                    passwd = ''.join([choice(letters + digits) for i in xrange(12)])
+                logger.info("User:"+request.user.username+", is mounting iso image")
+                if request.user.username == master:
+                     image = request.POST.get('media', '')
+                     dev = request.POST.get('mount_iso', '')
+                     conn.mount_iso(dev, image)
+                     return HttpResponseRedirect(request.get_full_path() + '#instancemedia')
                 else:
-                    passwd = request.POST.get('console_passwd', '')
-                    clear = request.POST.get('clear_pass', False)
-                    if clear:
-                        passwd = ''
-                    if not passwd and not clear:
-                        msg = _("Enter the console password or select Generate")
-                        errors.append(msg)
-                if not errors:
-                    if not conn.set_console_passwd(passwd):
-                        msg = _("Error setting console password. You should check that your instance have an graphic device.")
-                        errors.append(msg)
+                     msg = _("You don't have the permission to execute this operation")
+                     errors.append(msg)
+
+# Currently, adding all the cases to be executed only with root privilege, but we might have to split operations on different privileges. 
+#Though inefficient, following condition is coded on purpose.
+
+            if 'change_settings' in request.POST or 'change_xml' in request.POST or 'clone' in request.POST or 'set_autostart' in request.POST or 'unset_autostart' in request.POST or 'set_console_passwd' in request.POST or 'set_console_keymap' in request.POST or 'set_console_type' in request.POST or 'migrate' in request.POST or 'delete_snapshot' in request.POST or 'revert_snapshot' in request.POST:
+              if request.user.username == master:
+                if 'change_settings' in request.POST:
+                    description = request.POST.get('description', '')
+                    vcpu = request.POST.get('vcpu', '')
+                    cur_vcpu = request.POST.get('cur_vcpu', '')
+                    memory = request.POST.get('memory', '')
+                    memory_custom = request.POST.get('memory_custom', '')
+                    if memory_custom:
+                        memory = memory_custom
+                    cur_memory = request.POST.get('cur_memory', '')
+                    cur_memory_custom = request.POST.get('cur_memory_custom', '')
+                    if cur_memory_custom:
+                        cur_memory = cur_memory_custom
+                    logger.info("User:"+request.user.username+", is changing settings; new max memory = "+memory+" and new allocated  memory = "+cur_memory+" and cpus = "+vcpu)
+                    conn.change_settings(description, cur_memory, memory, cur_vcpu, vcpu)
+                    return HttpResponseRedirect(request.get_full_path() + '#instancesettings')
+                if 'change_xml' in request.POST:
+                    logger.info("User:"+request.user.username+", is changing the xml definition for VM")
+                    xml = request.POST.get('inst_xml', '')
+                    if xml:
+                        conn._defineXML(xml)
+                        return HttpResponseRedirect(request.get_full_path() + '#instancexml')
+                if 'clone' in request.POST:
+                    clone_data = {}
+                    clone_data['name'] = request.POST.get('name', '')
+
+                    for post in request.POST:
+                        if 'disk' or 'meta' in post:
+                            clone_data[post] = request.POST.get(post, '')
+                    logger.info("User:"+request.user.username+", issued clone request");
+                    conn.clone_instance(clone_data)
+                    return HttpResponseRedirect(reverse('instance', args=[host_id, clone_data['name']]))
+                if 'set_autostart' in request.POST:
+                    logger.info("User:"+request.user.username+", is issuing autostart operation on instance = "+vname)
+                    conn.set_autostart(1)
+                    return HttpResponseRedirect(request.get_full_path() + '#instancesettings')
+                if 'unset_autostart' in request.POST:
+                    logger.info("User:"+request.user.username+", is revoking autostart operation on instance = "+vname)
+                    conn.set_autostart(0)
+                    return HttpResponseRedirect(request.get_full_path() + '#instancesettings')
+                if 'set_console_passwd' in request.POST:
+                    if request.POST.get('auto_pass', ''):
+                        passwd = ''.join([choice(letters + digits) for i in xrange(12)])
                     else:
-                        return HttpResponseRedirect(request.get_full_path() + '#console_pass')
+                        passwd = request.POST.get('console_passwd', '')
+                        clear = request.POST.get('clear_pass', False)
+                        if clear:
+                            passwd = ''
+                        if not passwd and not clear:
+                            msg = _("Enter the console password or select Generate")
+                            errors.append(msg)
+                    if not errors:
+                        if not conn.set_console_passwd(passwd):
+                            msg = _("Error setting console password. You should check that your instance have an graphic device.")
+                            errors.append(msg)
+                        else:
+                            return HttpResponseRedirect(request.get_full_path() + '#console_pass')
+                
+                if 'set_console_keymap' in request.POST:
+                    keymap = request.POST.get('console_keymap', '')
+                    clear = request.POST.get('clear_keymap', False)
+                    if clear:
+                        conn.set_console_keymap('')
+                    else:
+                        conn.set_console_keymap(keymap)
+                    return HttpResponseRedirect(request.get_full_path() + '#console_keymap')
+                if 'set_console_type' in request.POST:
+                    console_type = request.POST.get('console_type', '')
+                    logger.info("User:"+request.user.username+", is modifying console type to "+console_type);
+                    conn.set_console_type(console_type)
+                    return HttpResponseRedirect(request.get_full_path() + '#console_type')
+                if 'migrate' in request.POST:
+                    compute_id = request.POST.get('compute_id', '')
+                    live = request.POST.get('live_migrate', False)
+                    unsafe = request.POST.get('unsafe_migrate', False)
+                    xml_del = request.POST.get('xml_delete', False)
+                    new_compute = Compute.objects.get(id=compute_id)
+                    conn_migrate = wvmInstances(new_compute.hostname,
+                                                new_compute.login,
+                                                new_compute.password,
+                                                new_compute.type)
+                    logger.info("User:"+request.user.username+", issued a migrate request with instance: "+vname);
+                    conn_migrate.moveto(conn, vname, live, unsafe, xml_del)
+                    conn_migrate.define_move(vname)
+                    conn_migrate.close()
+                    return HttpResponseRedirect(reverse('instance', args=[compute_id, vname]))
 
-            if 'set_console_keymap' in request.POST:
-                keymap = request.POST.get('console_keymap', '')
-                clear = request.POST.get('clear_keymap', False)
-                if clear:
-                    conn.set_console_keymap('')
-                else:
-                    conn.set_console_keymap(keymap)
-                return HttpResponseRedirect(request.get_full_path() + '#console_keymap')
+                if 'delete_snapshot' in request.POST:
+                    snap_name = request.POST.get('name', '')
+                    logger.info("User:"+request.user.username+", initiated delete-request for snapshot: "+snap_name)
+                    conn.snapshot_delete(snap_name)
+                    return HttpResponseRedirect(request.get_full_path() + '#istaceshapshosts')
+                if 'revert_snapshot' in request.POST:
+                    snap_name = request.POST.get('name', '')
+                    logger.info("User:"+request.user.username+", is reverting snapshot: "+snap_name)
+                    conn.snapshot_revert(snap_name)
+                    msg = _("Successful revert snapshot: ")
+                    msg += snap_name
+                    messages.append(msg)
 
-            if 'set_console_type' in request.POST:
-                console_type = request.POST.get('console_type', '')
-                conn.set_console_type(console_type)
-                return HttpResponseRedirect(request.get_full_path() + '#console_type')
-
-            if 'migrate' in request.POST:
-                compute_id = request.POST.get('compute_id', '')
-                live = request.POST.get('live_migrate', False)
-                unsafe = request.POST.get('unsafe_migrate', False)
-                xml_del = request.POST.get('xml_delete', False)
-                new_compute = Compute.objects.get(id=compute_id)
-                conn_migrate = wvmInstances(new_compute.hostname,
-                                            new_compute.login,
-                                            new_compute.password,
-                                            new_compute.type)
-                conn_migrate.moveto(conn, vname, live, unsafe, xml_del)
-                conn_migrate.define_move(vname)
-                conn_migrate.close()
-                return HttpResponseRedirect(reverse('instance', args=[compute_id, vname]))
-            if 'delete_snapshot' in request.POST:
-                snap_name = request.POST.get('name', '')
-                conn.snapshot_delete(snap_name)
-                return HttpResponseRedirect(request.get_full_path() + '#istaceshapshosts')
-            if 'revert_snapshot' in request.POST:
-                snap_name = request.POST.get('name', '')
-                conn.snapshot_revert(snap_name)
-                msg = _("Successful revert snapshot: ")
-                msg += snap_name
-                messages.append(msg)
-            if 'clone' in request.POST:
-                clone_data = {}
-                clone_data['name'] = request.POST.get('name', '')
-
-                for post in request.POST:
-                    if 'disk' or 'meta' in post:
-                        clone_data[post] = request.POST.get(post, '')
-
-                conn.clone_instance(clone_data)
-                return HttpResponseRedirect(reverse('instance', args=[host_id, clone_data['name']]))
+              else:
+                    logger.info("User:"+request.user.username+", is changing the settings for VM: "+vname)
+                    msg = _("You don't have the permission to execute this operation")
+                    errors.append(msg) 
 
         conn.close()
 

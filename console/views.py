@@ -56,4 +56,5 @@ def console(request):
         response = "Console type %s no support" % console_type
 
     response.set_cookie('token', token)
+    logging.debug("User defined message has been called");
     return response
